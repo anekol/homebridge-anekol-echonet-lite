@@ -1,2 +1,5 @@
-# homebridge-anekol-echonet-lite-aircon
-Homebridge support for Echonet Lite based aircon controllers.
+# homebridge-anekol-echonet-lite
+Homebridge support for Echonet Lite based devices.
+
+Supported devices:
+* Airconditioners

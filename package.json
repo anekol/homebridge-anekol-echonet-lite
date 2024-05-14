@@ -1,7 +1,7 @@
 {
-  "name": "homebridge-anekol-mitsubishi-aircon",
-  "description": "Homebridge Anekol Mitsubishi Aircon",
-  "version": "0.0.9",
+  "name": "homebridge-anekol-echonet-lite",
+  "description": "Homebridge Anekol Echonet Lite",
+  "version": "0.0.1",
   "license": "MIT",
   "engines": {
     "node": ">=18.0.0",
@@ -10,19 +10,22 @@
   "main": "dist/index.js",
   "scripts": {
     "lint": "eslint src/**.ts --max-warnings=0",
-    "prepare": "npm run lint && tsc --build --clean && tsc",
-    "prepublishOnly": "npm run prepare"
+    "build": "tsc --build --clean && tsc",
+    "prepublishOnly": "npm run lint && npm run build"
   },
   "keywords": [
     "homebridge-plugin"
   ],
   "dependencies": {
+    "ncu": "^0.2.1",
     "node-echonet-lite": "^0.6.0",
+    "npm-check-updates": "^16.14.20"
   },
   "devDependencies": {
     "@types/node": "^20.9.0",
     "@typescript-eslint/eslint-plugin": "^5.62.0",
     "@typescript-eslint/parser": "^5.62.0",
+    "axios": "^1.6.1",
     "eslint": "^8.53.0",
     "homebridge": "^1.7.0",
     "typescript": "^4.9.5"

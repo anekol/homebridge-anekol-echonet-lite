@@ -1,29 +1,23 @@
-// class to provide a Logitech Harmony Hub platform
+// class to provide an Echonet Lite platform
 import { API, DynamicPlatformPlugin, HAP, Logger, PlatformAccessory, PlatformConfig } from "homebridge";
-import { AnekolHarmonyApi } from './harmony_api';
-import { AnekolHarmonyHubDevicesHelper } from './devices';
-import { AnekolHarmonyHubHelper } from './hub';
-import { AnekolHarmonyHubVolumeHelper } from './volume';
+import { Device, Error, Response } from 'node-echonet-lite';
+import { AnekolAirconHandler } from './aircon';
+import EchonetLite = require('node-echonet-lite');
 
 module.exports = (api: API) => {
-  api.registerPlatform(PLATFORM_NAME, AnekolHarmonyHub);
+  api.registerPlatform(PLATFORM_NAME, AnekolEchonetLite);
 }
 
-const PLATFORM_NAME = 'AnekolHarmonyHub';
-const PLUGIN_NAME = 'homebridge-anekol-harmony-hub'; // Plugin name from package.json
+const PLATFORM_NAME = 'AnekolEchonetLite';
+const PLUGIN_NAME = 'homebridge-anekol-echonet-lite'; // Plugin name from package.json
 
-export interface Activity { id: string, slug: string, label: string, isAVActivity: boolean }
-export interface Device { id: string, slug: string, label: string }
-export interface Hub { slug: string, activities: Activity[], devices: Device[], power_on: string[], power_off: string[], power_toggle: string[] }[]
-export interface HubConfig { slug: string, label: string, devices: string[] }
+const ECHONET_GROUP_AIRCON = 0x01
+const ECHONET_CLASS_AIRCON = 0x30
 
-export class AnekolHarmonyHub implements DynamicPlatformPlugin {
+export class AnekolEchonetLite implements DynamicPlatformPlugin {
   private configured: PlatformAccessory[] = []
+  public el: typeof EchonetLite
   private hap: HAP
-  private harmony_api: AnekolHarmonyApi
-  private host: string
-  private hubs_config: HubConfig[]
-  private port = "8282"
   private restored: PlatformAccessory[] = []
   private verboseLog = false
 
@@ -35,135 +29,86 @@ export class AnekolHarmonyHub implements DynamicPlatformPlugin {
     this.hap = api.hap
 
     // user config
-    this.host = config.host as string || "localhost"
-    this.port = config.port as string || "8282"
-    this.verboseLog = config.verboseLog as boolean || false
-    this.hubs_config = config.hubs || [] as HubConfig[];
-
-    this.harmony_api = new AnekolHarmonyApi(log, this.host, this.port, this.verboseLog)
+    this.verboseLog = config.verboseLog as boolean || true
 
     // wait for "didFinishLaunching" 
     api.on('didFinishLaunching', () => {
       this.log.info("Finished restoring cached accessories")
 
-      // configure the hub and it's accessories
-      this.discover_hubs().then((hubs) => {
-
-        for (const hub of hubs) {
-          const hub_config = this.config_for(hub.slug)
-
-          // ignore discovered hubs that aren't present in the plugin config
-          if (hub_config) {
-            let uuid, accessory
-            const hub_label = hub_config.label || ""
-
-            // configure the main hub accessory
-            uuid = this.hap.uuid.generate(PLUGIN_NAME + "_" + hub.slug + "_hub")
-            accessory = this.find_restored(uuid)
-            if (!accessory) {
-              accessory = new this.api.platformAccessory(hub_label, uuid, this.hap.Categories.TELEVISION);
-              this.api.publishExternalAccessories(PLUGIN_NAME, [accessory]);
-              this.log.info('Added new accessory: ' + accessory.displayName);
-            } else {
-              if (this.verboseLog)
-                this.log.info('Restored: ' + accessory.displayName);
+      this.el = new EchonetLite({ 'type': 'lan' });
+      this.el.init((err: string) => {
+        if (err) {
+          this.log.error(err);
+        } else {
+          // configure the device and it's accessories
+          // Start to discover Echonet Lite devices
+          this.el.startDiscovery((err: Error, res: Response) => {
+            if (err) {
+              this.logErrorAndExit(err);
             }
-            new AnekolHarmonyHubHelper(this, accessory, this.harmony_api, hub, this.verboseLog)
-            this.add_configured(accessory)
+            // Determine the type of the found device
+            const device = res['device'];
+            const address = device['address'];
+            const eoj = device['eoj'][0];
+            const group_code = eoj[0];
+            const class_code = eoj[1];
 
-            // configure hub devices accessory
-            uuid = this.hap.uuid.generate(PLUGIN_NAME + "_" + hub.slug + "_devices")
-            accessory = this.find_restored(uuid)
-            if (!accessory) {
-              accessory = new this.api.platformAccessory(hub_label + " Devices", uuid, this.hap.Categories.SWITCH);
-              this.api.registerPlatformAccessories(PLUGIN_NAME, PLATFORM_NAME, [accessory]);
-              this.log.info('Added new accessory: ' + accessory.displayName);
-            } else {
-              if (this.verboseLog)
-                this.log.info('Restored: ' + accessory.displayName);
+            switch (group_code) {
+              case ECHONET_GROUP_AIRCON: {
+                switch (class_code) {
+                  case ECHONET_CLASS_AIRCON: {
+                    // This means that the found device belongs to the home air conditioner class
+                    this.log.info('Found AirConditioner: ' + address);
+                    this.config_aircon(device, address)
+                    break;
+                  }
+                  default: {
+                    break;
+                  }
+                }
+                break;
+              }
+              default: {
+                break;
+              }
             }
+          });
 
-            // configure the hub devices accessory
-            new AnekolHarmonyHubDevicesHelper(this, accessory, this.harmony_api, hub, hub_config.devices, this.verboseLog)
-            this.add_configured(accessory)
-
-            // configure hub volume accessory
-            uuid = this.hap.uuid.generate(PLUGIN_NAME + "_" + hub.slug + "_volume")
-            accessory = this.find_restored(uuid)
-            if (!accessory) {
-              accessory = new this.api.platformAccessory(hub_label + " Volume", uuid, this.hap.Categories.SPEAKER);
-              this.api.registerPlatformAccessories(PLUGIN_NAME, PLATFORM_NAME, [accessory]);
-              this.log.info('Added new accessory: ' + accessory.displayName);
-            } else {
+          setTimeout(() => {
+            this.el.stopDiscovery();
+            for (const c of this.configured) {
               if (this.verboseLog)
-                this.log.info('Restored: ' + accessory.displayName);
+                this.log.info("Configured: " + c.displayName)
             }
-
-            new AnekolHarmonyHubVolumeHelper(this, accessory, this.harmony_api, hub, this.verboseLog)
-            this.add_configured(accessory)
-          }
+          }, 60 * 1000);
         }
-
-        // deregister any restored accessories not configured
-        for (const r of this.restored) {
-          if (this.verboseLog)
-            this.log.info("Restored: " + r.displayName)
-          if (!this.configured.find(c => c.UUID === r.UUID)) {
-            this.log.info("Deregister: not configured: " + r.displayName)
-            this.api.unregisterPlatformAccessories(PLUGIN_NAME, PLATFORM_NAME, [r])
-          }
-        }
-
-        for (const c of this.configured) {
-          if (this.verboseLog)
-            this.log.info("Configured: " + c.displayName)
-
-        }
-      })
+      });
     })
   }
 
-  // discover hub configurations
-  private async discover_hubs() {
-    const discovered_hubs: Hub[] = []
 
-    // find hubs
-    const hd = await this.harmony_api.get("")
-    const hub_slugs = hd.hubs ? hd.hubs : []
+  // configure an aircon
+  public config_aircon(device: typeof Device, address: string) {
 
-    for (const hub_slug of hub_slugs) {
-
-      // find hub activities
-      const ad = await this.harmony_api.get(hub_slug + "/activities")
-      const activities: Activity[] = ad.activities ? ad.activities : []
-
-      // find hub devices
-      const dd = await this.harmony_api.get(hub_slug + "/devices")
-      const devices: Device[] = dd.devices ? dd.devices : []
-
-      // find out how hub devices are power managed
-      const power_on: string[] = []
-      const power_off: string[] = []
-      const power_toggle: string[] = []
-
-      for (const device of devices) {
-        const commands = (await this.harmony_api.get(hub_slug + "/devices/" + device.slug + "/commands")).commands
-
-        // determine is device has commands for power-on/power-off
-        for (const c of commands) {
-          if (c.slug == "power-on")
-            power_on.push(device.slug)
-          if (c.slug == "power-off")
-            power_off.push(device.slug)
-          if (c.slug == "power-toggle")
-            power_toggle.push(device.slug)
-        }
-      }
-      discovered_hubs.push({ slug: hub_slug, activities: activities, devices: devices, power_on: power_on, power_off: power_off, power_toggle: power_toggle })
+    // configure the main device accessory
+    const uuid = this.hap.uuid.generate(PLUGIN_NAME + "_device_" + address)
+    let accessory = this.find_restored(uuid)
+    if (!accessory) {
+      // accessory = new this.api.platformAccessory(address, uuid, this.hap.Categories.AIR_CONDITIONER);
+      accessory = new this.api.platformAccessory(address, uuid);
+      this.log.info('Added new accessory: ' + accessory.displayName);
+    } else {
+      if (this.verboseLog)
+        this.log.info('Restored: ' + accessory.displayName);
     }
-    if (this.verboseLog)
-      this.log.info("Discovered Hubs: " + JSON.stringify(discovered_hubs))
-    return discovered_hubs
+    new AnekolAirconHandler(this, accessory, this.el, device, this.verboseLog)
+    this.add_configured(accessory)
+  }
+
+  // log error and exit
+  private logErrorAndExit(err: Error) {
+    this.log.info("Discovery Error: " + err.toString());
+    process.exit();
   }
 
   // add accessory to configured list
@@ -182,13 +127,5 @@ export class AnekolHarmonyHub implements DynamicPlatformPlugin {
     return this.restored.find(a => a.UUID === uuid)
   }
 
-  // find config for a hub
-  private config_for(slug: string) {
-    for (const hub of this.hubs_config) {
-      if (hub.slug == slug) {
-        return hub
-      }
-    }
-    return null
-  }
+
 }
